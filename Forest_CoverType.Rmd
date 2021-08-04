@@ -1,0 +1,403 @@
+---
+title: "Forest Cover Type Data"
+author: "Sashank Deb"
+output: html_document
+---
+```{r, include=FALSE}
+options(tinytex.verbose = TRUE)
+```
+
+To predict the forest cover type (the predominant kind of tree cover) from cartographic variables.  
+The study area includes four wilderness areas located in the Roosevelt National Forest of northern Colorado. Each observation is a 30m x 30m patch. This project focuses to predict an integer classification for the forest cover type. 
+
+The seven types are: 
+1 - Spruce/Fir
+2 - Lodgepole Pine 
+3 - Ponderosa Pine 
+4 - Cottonwood/Willow 
+5 - Aspen 
+6 - Douglas-fir 
+7 - Krummholz 
+
+While forests have great value to society by providing clean water, fresh air, carbon storage and timber, predicting the forest type will help us provide better solutions for environmental and economical growth of society. 
+Abstracting data and observing it!!
+====
+```{r}
+forest=read.csv("C:/Users/HP/Documents/lets start/SEM 5/MACHINE LEARNING/forest-cover-type-kernels-only/train.csv")
+names(forest)
+dim(forest)
+class(forest)
+summary(forest)
+attach(forest)
+library(ISLR)
+library(MASS)
+hist(Cover_Type)
+#plot(Cover_Type~.,forest)
+```
+Applying Multiple Linear Regression
+====
+```{r}
+fit1=lm(Cover_Type~.,forest)
+summary(fit1)
+plot(fit1,col=Cover_Type)
+```
+Multiple linear regression after excluding categories which are not affecting the model
+=====
+
+```{r}
+fit2=update(fit1,~.-Wilderness_Area4-Soil_Type7-Soil_Type15-Soil_Type35-Soil_Type36-Soil_Type40)
+summary(fit2)
+plot(fit2,col=Cover_Type)
+```
+Applying LDA
+===
+```{r}
+forest=na.omit(forest)
+lda.fit=lda(Cover_Type~Elevation+Aspect+Slope+Horizontal_Distance_To_Hydrology+Horizontal_Distance_To_Roadways+Vertical_Distance_To_Hydrology+Hillshade_9am+Hillshade_Noon+Hillshade_3pm+Horizontal_Distance_To_Fire_Points+Wilderness_Area1+Soil_Type1,data=forest,subset = Id<7560)
+lda.fit
+plot(lda.fit,col=Cover_Type)
+forest.7560=subset(forest,Id>7560)
+lda.pred=predict(lda.fit,forest.7560)
+class(lda.pred)
+data.frame(lda.pred)[1:5,]
+table(lda.pred$class,forest.7560$Cover_Type)
+mean(lda.pred$class==forest.7560$Cover_Type)
+```
+Applying KNN
+===
+```{r}
+library(class)
+xlag=cbind(Elevation,Aspect,Slope,Horizontal_Distance_To_Hydrology,Horizontal_Distance_To_Roadways,Vertical_Distance_To_Hydrology,Hillshade_9am,Hillshade_Noon,Hillshade_3pm,Horizontal_Distance_To_Fire_Points,Wilderness_Area1,Soil_Type1)
+train=Id<7650
+knn.pred=knn(xlag[train,],xlag[!train,],Cover_Type[train],k=1)
+table(knn.pred,Cover_Type[!train])
+mean(knn.pred==Cover_Type[!train])
+```
+Trying Logistic Regression
+===
+```{r}
+glm.fit=glm(Cover_Type~.,data=forest,family=gaussian())
+summary(glm.fit)
+glm.probs=predict(glm.fit,type="response")
+glm.probs[1:5]
+glm.pred=ifelse(glm.probs>1,"1","2-7")
+table(glm.pred,Cover_Type)
+mean(glm.pred==Cover_Type)
+```
+Validation approaches
+======
+```{r}
+#leave one out cross validation
+loocv=function(fit){
+  h=lm.influence(fit)$h
+  mean((residuals(fit)/(1-h))^2)
+}
+loocv(glm.fit)
+cv.errors=rep(0,5)
+train=Id<7650
+library(boot)
+alpha=function(x,y){
+  vx=var(x)
+  vy=var(y)
+  cxy=cov(x,y)
+  (vy-cxy)/(vx+vy-2*cxy)
+}
+alpha.fn=function(data,index){
+  with(data[index,],alpha(x,y))
+}
+```
+Model selection Techniques by variable selection
+===
+It includes forward selection, backward selection, validation set approach and cross-validation approach
+```{r}
+library(leaps)
+
+#model selection using forward selection
+
+regfit.fwd=regsubsets(Cover_Type~.,data=forest,nvmax=19,method="forward")
+reg.summary=summary(regfit.fwd)
+names(reg.summary)
+plot(reg.summary$cp,xlab="Number of variables",ylab="cp")
+which.min(reg.summary$cp)
+points(20,reg.summary$cp[20],pch=20,col="red")
+plot(regfit.fwd,scale="Cp",col=Cover_Type)
+coef(regfit.fwd,20)
+
+#model selection using backward selection
+
+regfit.bwd=regsubsets(Cover_Type~.,data=forest,nvmax=19,method="backward")
+regg.summary=summary(regfit.bwd)
+names(regg.summary)
+plot(regg.summary$cp,xlab="Number of variables",ylab="cp")
+which.min(regg.summary$cp)
+points(20,regg.summary$cp[20],pch=20,col="red")
+plot(regfit.bwd,scale="Cp",col=Cover_Type)
+coef(regfit.bwd,20)
+
+#model selection using a validation set
+
+set.seed(1)
+dim(forest)
+train=sample(seq(15120),10080,replace = FALSE)
+regfit.fwd=regsubsets(Cover_Type~.,data=forest[train,],nvmax=19,method="forward")
+vol.errors=rep(NA,19)
+x.test=model.matrix(Cover_Type~.,data=forest[-train,])
+for(i in 1:19){
+  coefi=coef(regfit.fwd,id=i)
+  pred=x.test[,names(coefi)]%*%coefi
+  vol.errors[i]=mean((forest$Elevation[-train]-pred)^2)
+}
+plot(sqrt(vol.errors),ylab="Root MSE",ylim=c(1,15120),pch=19,type = "b")
+points(sqrt(regfit.fwd$rss[-1]/10080),col="blue",pch=19,type = "b")
+legend("topright",legend=c("Training","Validation"),col=c("blue","black"),pch=19)
+
+#model selection by cross-validation
+
+set.seed(11)
+folds=sample(rep(1:10,length=nrow(forest)))
+table(folds)             
+cv.errors=matrix(NA,10,19)
+#function to predict regsubsets as normal method predict() does not support
+predict.regsubsets = function(object, newdata, id, ...) {
+  form  <-  as.formula(~.)
+  mat  <-  model.matrix(form, newdata)
+  coefi  <-  coef(object, id)
+  xvars  <-  names(coefi)
+  mat[, xvars] %*% coefi
+}
+for(k in 1:10){
+  best.fit=regsubsets(Cover_Type~.,data=forest[folds!=k,],nvmax=19,method="forward")
+  for(i in 1:19){
+    pred=predict.regsubsets(best.fit,forest[folds==k,],id=i)
+    cv.errors[k,i]=mean((forest$Cover_Type[folds==k]-pred)^2)
+  }
+}
+rmse.cv = sqrt(apply(cv.errors, 2, mean))
+plot(rmse.cv, pch = 19, type = "b")
+
+```
+LASSO AND RIDGE REGRESSION
+===
+```{r}
+library(glmnet)
+x=model.matrix(Cover_Type~.-1,data=forest)
+y=forest$Cover_Type
+
+#Ridge Regression
+
+fit.ridge=glmnet(x,y,alpha=0)
+plot(fit.ridge,xvar = "lambda",label = TRUE)
+#models in ridge regression are penalized by sum of squares of coefficient controlled by parameter lambda.
+#as lambda increases coefficients shring to 0
+#when lambda =0 coefficients are same as we get for ordinary least square fit of variables
+plot(fit.ridge,xvar = "dev",label = TRUE)
+#fraction of deviavnce explained (like r squared)
+cv.ridge=cv.glmnet(x,y,alpha=0)
+#applying cross validation
+plot(cv.ridge)
+#plot of cross validation vs mean squared error
+#grey area marks one - standard error of minimum
+
+#LASSO
+
+fit.lasso=glmnet(x,y) #default value of alpha=1
+plot(fit.lasso,xvar="lambda",label=TRUE)
+plot(fit.lasso,xvar="dev",label=TRUE)#indicates end of path is overfitting
+cv.lasso=cv.glmnet(x,y)
+plot(cv.lasso)
+#minimum cross validadion error is at size 51
+#with one standard error we have model of size 45
+coef(cv.lasso)
+#it gives coeff of all features after cross validation in coeff. calculated by lasso for best linear model
+#it has picked the model with one standard error to avoid over-fitting
+```
+Using earlier training data selecting best lambda for lasso
+====
+```{r}
+lasso.tr=glmnet(x[train,],y[train])
+lasso.tr
+#it gives degree of freedom(no of non-zero coeff), %deviance, labda corresponding to that fit
+#it stops and values stop changing
+pred=predict(lasso.tr,x[-train,])
+dim(pred)
+#5040 = observations in validation set
+#87=lamda(column wise)
+rmse=sqrt(apply((y[-train]-pred)^2,2,mean))
+plot(log(lasso.tr$lambda),rmse,type = "b",xlab = "log(lambda)") #validation curve 
+#with no over fitting and underfitting after log(lambda)=-2
+#extract the best lambda
+lam.best=lasso.tr$lambda[order(rmse)[1]]
+lam.best
+coef(lasso.tr,s=lam.best)
+#coeff corresponding to lamda in sparse matrix format
+```
+
+Observing data
+===============
+```{r}
+#forest=read.csv("C:/Users/HP/Desktop/lets start/SEM 5/MACHINE LEARNING/forest-cover-type-kernels-only/train.csv")
+attach(forest)
+require(tree)
+#marking cover type as factor
+hist(Cover_Type)
+forest$Cover_Type=factor(forest$Cover_Type)
+```
+Decision Trees
+===============
+```{r}
+tree.forest1=tree(Cover_Type~.-Id-Cover_Type,data=forest,method = "class")
+summary(tree.forest1)
+plot(tree.forest1)
+text(tree.forest1,pretty = 0)
+tree.forest1
+set.seed(1011)
+train=sample(1:nrow(forest),9072)
+#train data = 9072 observations
+#test data = 6048 observations
+tree.forest2=tree(Cover_Type~.-Id-Cover_Type,data=forest,subset = train,method="class")
+plot(tree.forest2);text(tree.forest2,pretty = 0)
+#as we can observe the length of each node reduces as 60% of data is used
+tree.pred=predict(tree.forest2,forest[-train,],type="class")
+confusion_matrix=with(forest[-train,],table(tree.pred,Cover_Type))
+confusion_matrix
+(479+351+236+767+509+442+800)/6048
+#acurracy=60.8% which is very better than lda and knn models
+#since we are using rpart package which follows recursive partitioning so pruning is not required.
+#efforts to prune the above decision tree
+cv.forest=cv.tree(tree.forest2,FUN=prune.misclass)
+cv.forest
+plot(cv.forest)
+#best value is equal to size with minimul misclass
+prune.forest=prune.misclass(tree.forest2,best=8)
+plot(prune.forest);text(prune.forest,pretty=0)
+tree.pred2=predict(prune.forest,forest[-train,],type="class")
+with(forest[-train,],table(tree.pred2,Cover_Type))
+(479+351+236+767+509+442+800)/6048
+```
+Random Forest
+==============
+```{r}
+library(randomForest)
+set.seed(101)
+rf.forest=randomForest(Cover_Type~.,data=forest[train,],ntree=100,proximity=TRUE,method="class")
+rf.forest$mtry
+#no of variables randomly chosen at each split 
+print(rf.forest)
+#another way of getting confusion matrix
+table(predict(rf.forest),forest[train,]$Cover_Type)
+(942+835+935++1280+1161+1066+1240)/9072
+#82.2% accuracy on training data
+plot(rf.forest)
+importance(rf.forest)
+varImpPlot(rf.forest)
+#randomforest for testing data
+pred.forest=predict(rf.forest,newdata = forest[-train])
+table(pred.forest,forest$Cover_Type)
+(1869+1800+1707+2113+2089+1988+2125)/15120
+#this model gives 90.77% accuracy for testing data
+require(RColorBrewer)
+plot(margin(rf.forest,forest$Cover_Type))
+#now we will try to tune random forest
+tune.rf=tuneRF(forest[,-5],forest[,5],stepFactor = 0.5)
+```
+Bagging
+========
+```{r}
+forest.test=forest[-train,"Cover_Type"]
+set.seed(1)
+bag.forest=randomForest(Cover_Type~.,data=forest,subset=train,mtry=13,importance=TRUE)
+bag.forest
+(1001+858+1032+1242+1276+1145+1254)/9072
+#86.24%accuracy for training data
+par(mfrow=c(1,2))
+yhat.bag = predict(bag.forest,newdata=forest[-train,])
+plot(yhat.bag, forest.test)
+abline(0,1)
+#mean((yhat.bag-forest.test)^2)
+bag.forest=randomForest(Cover_Type~.,data=forest,subset=train,mtry=13,ntree=25)
+yhat.bag = predict(bag.forest,newdata=forest[-train,])
+plot(yhat.bag, forest.test)
+abline(0,1)
+#a very slight difference can be see in testing vs training prediction 
+par(mfrow=c(1,1))
+```
+Boosting
+=========
+```{r}
+library(gbm)
+forest.test=forest[-train,"Cover_Type"]
+boost.forest=gbm(Cover_Type~.-Id-Cover_Type,data=forest[train,],distribution="gaussian",n.trees=1000,shrinkage=0.01,interaction.depth=4)
+summary(boost.forest)
+plot(boost.forest,i="Elevation")
+plot(boost.forest,i="Horizontal_Distance_To_Roadways")
+plot(boost.forest,i="Horizontal_Distance_To_Fire_Points")
+n.tree=seq(from=100,to=10000,by=100)
+forest$Cover_Type=as.numeric(forest$Cover_Type)
+pre=predict(boost.forest,newdata=forest[-train,],n.trees=n.tree)
+dim(pre)
+berr=with(forest[-train,],apply(I(pre-Cover_Type)^2,2,mean))
+plot(n.tree,berr,pch=19,ylab="Mean Squared Error",xlab = "#trees",main="Boosting test error")
+#abline(h=min(boost.forest$train.error),col="red",pch=1)
+```
+SVM
+====
+```{r}
+#forest=na.omit(forest)
+forest$Cover_Type=factor(forest$Cover_Type)
+library(e1071)
+forest=forest[1:1500,2:16]
+Cover_Type=factor(Cover_Type)
+training=forest[451:1500,]
+testing=forest[1:450,]
+#we have divided over data in two parts 70:30 ratio as training and testing data
+#since its raw data it doesnt matter how we pich the two sets
+x.training=rbind(subset(training,select = -Cover_Type))
+y.training=training$Cover_Type
+x.testing=rbind(subset(testing,select = -Cover_Type))
+y.testing=testing$Cover_Type
+plot(x.training,col=y.training,pch=19)
+dat=data.frame(x=x.training,y=as.factor(y.training))
+svmfit=svm(y~.,data=dat,kernel="radial",cost=10,gamma=1,scale=TRUE)
+make.graid=function(x,n=75){
+  grange=apply(x,2,range)
+  X1=seq(from=grange[1,1],to=grange[2,1],length=n)
+  X2=seq(from=grange[1,2],to=grange[2,2],length=n)
+  expand.grid(x1=X1,x2=X2)
+}
+plot(svmfit,dat,x.Elevation~x.Aspect)
+plot(svmfit,dat,x.Elevation~x.Slope)
+plot(svmfit,dat,x.Elevation~x.Vertical_Distance_To_Hydrology)
+plot(svmfit,dat,x.Elevation~x.Horizontal_Distance_To_Roadways)
+plot(svmfit,dat,x.Elevation~x.Hillshade_9am)
+summary(svmfit)
+#we will use 10 fold cross-validation
+set.seed(1)
+train=sample(200,100)
+tune.out=tune(svm,y~.,data=dat[train,],kernel="radial",ranges=list(cost=c(.001,.01,.1,1,5,10,100),gamma=c(0.5,1,2,3,4)))
+summary(tune.out)
+bestmodel=tune.out$best.model
+summary(bestmodel)
+#cost=0.01,gamma=1
+#prediction using best model
+require(pROC)
+require(caret)
+table(true=dat[-train,"y"], pred=predict(tune.out$best.model,newdata=dat[-train,]))
+require(RROC)
+svmPrediction <- predict(tune.out$best.model, dat)
+svmPredictionprob <- predict(tune.out$best.model, dat, type='prob')
+svmConfMat <- confusionMatrix(svmPrediction, dat[,"y"])
+svmConfMat
+par(mfrow=c(1,1))
+#ROC Curve
+AUC = list()
+Accuracy = list()
+row.names <- names(Accuracy)
+col.names <- c("AUC", "Accuracy")
+Accuracy$svm <- svmConfMat$overall['Accuracy']
+Accuracy$svm
+AUC$svm <- multiclass.roc(as.numeric(dat$y),as.numeric(as.matrix((svmPredictionprob))),percent = FALSE )$auc
+AUC$svm
+mul=multiclass.roc(as.numeric(dat$y),as.numeric(as.matrix((svmPredictionprob))),percent = FALSE )
+summary(mul)
+```
+since this data has 7 different classifiers it was very difficult to apply support vector machines(47.33% accuracy) and show multiclass roc curve and while using Random Forest for thi data set it gives 90.7% accuracy for test data so for FOREST COVER TYPE DATASET, Random Forest model suits best.
